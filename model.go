@@ -1,9 +1,9 @@
 package model
 
 import (
-	"cloud.google.com/go/datastore"
 	"context"
 	"fmt"
+	"google.golang.org/appengine/datastore"
 	"reflect"
 	"strings"
 )
@@ -14,7 +14,6 @@ const tagDomain string = "model"
 const tagNoindex string = "noindex"
 const tagZero string = "zero"
 const tagAncestor string = "ancestor"
-
 // Indicates that the given reference is "readonly"
 // That is, it is provided from outside of the model
 // An example would be the product model on a purchase model:
@@ -124,7 +123,7 @@ func FromIntID(ctx context.Context, m modelable, id int64, ancestor modelable) e
 		ancKey = ancestor.getModel().Key
 	}
 
-	model.Key = datastore.IDKey(model.structName, id, ancKey)
+	model.Key = datastore.NewKey(ctx, model.structName, "", id, ancKey)
 	return Read(ctx, m)
 }
 
@@ -145,7 +144,7 @@ func FromStringID(ctx context.Context, m modelable, id string, ancestor modelabl
 		ancKey = ancestor.getModel().Key
 	}
 
-	model.Key = datastore.NameKey(model.structName, id, ancKey)
+	model.Key = datastore.NewKey(ctx, model.structName, id, 0, ancKey)
 	return Read(ctx, m)
 }
 
@@ -170,14 +169,14 @@ func (model Model) IntID() int64 {
 		return -1
 	}
 
-	return model.Key.ID
+	return model.Key.IntID()
 }
 
 func (model Model) StringID() string {
 	if model.Key == nil {
 		return ""
 	}
-	return model.Key.Name
+	return model.Key.StringID()
 }
 
 //Returns the name of the modelable this model refers to

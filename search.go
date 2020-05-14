@@ -2,10 +2,9 @@ package model
 
 import (
 	"bytes"
-	"cloud.google.com/go/datastore"
 	"context"
 	"fmt"
-	"google.golang.org/appengine"
+	"google.golang.org/appengine/datastore"
 	"google.golang.org/appengine/search"
 	"reflect"
 	"strings"
@@ -156,11 +155,7 @@ func (model *searchable) Save() ([]search.Field, *search.DocumentMetadata, error
 				sf.Value = t
 			}
 		case _geopoint:
-			np := field.Interface().(datastore.GeoPoint)
-			legacy := appengine.GeoPoint{}
-			legacy.Lat = np.Lat
-			legacy.Lng = np.Lng
-			sf.Value = legacy
+			sf.Value = field.Interface()
 		case _key:
 			key := model.referenceAtIndex(desc.index).Key
 			sf.Value = search.Atom(key.Encode())

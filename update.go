@@ -1,35 +1,24 @@
 package model
 
 import (
-	"cloud.google.com/go/datastore"
 	"context"
 	"fmt"
+	"google.golang.org/appengine/datastore"
 )
-
-type UpdateOptions struct {
-	attempts int
-}
-
-func (opts *UpdateOptions) InTransaction(attempts int) {
-	opts.attempts = attempts
-}
-
-func NewUpdateOptions() UpdateOptions {
-	return UpdateOptions{}
-}
 
 // Reads data from a modelable and writes it into the corresponding entity of the datastore.
 // If a reference is read from the storage and then assigned to the root modelable
 // the root modelable will point to the loaded entity
 // If a reference is newly created its value will be updated accordingly to the model
-func UpdateInTransaction(ctx context.Context, m modelable, opts *UpdateOptions) (err error) {
+func UpdateInTransaction(ctx context.Context, m modelable) (err error) {
 	index(m)
 
-	to := datastore.MaxAttempts(opts.attempts)
-	client := ClientFromContext(ctx)
-	_, err = client.RunInTransaction(ctx, func(tx *datastore.Transaction) error {
+	opts := datastore.TransactionOptions{}
+	opts.XG = true
+	opts.Attempts = 1
+	err = datastore.RunInTransaction(ctx, func(ctx context.Context) error {
 		return update(ctx, m)
-	}, to)
+	}, &opts)
 
 	if err == nil {
 		if err = saveInMemcache(ctx, m); err != nil {
@@ -99,8 +88,7 @@ func updateReference(ctx context.Context, ref *reference, key *datastore.Key) (e
 		model.references[i] = r
 	}
 
-	client := ClientFromContext(ctx)
-	_, err = client.Put(ctx, key, ref.Modelable)
+	_, err = datastore.Put(ctx, key, ref.Modelable)
 
 	if err != nil {
 		return err
@@ -151,14 +139,13 @@ func update(ctx context.Context, m modelable) error {
 		model.references[i] = ref
 	}
 
-	client := ClientFromContext(ctx)
-	key, err := client.Put(ctx, model.Key, m)
+	Key, err := datastore.Put(ctx, model.Key, m)
 
 	if err != nil {
 		return err
 	}
 
-	model.Key = key
+	model.Key = Key
 
 	if model.searchable {
 		err = searchPut(ctx, model, model.Name())

@@ -1,9 +1,9 @@
 package model
 
 import (
-	"cloud.google.com/go/datastore"
 	"context"
 	"errors"
+	"google.golang.org/appengine/datastore"
 )
 
 // Create methods
@@ -31,17 +31,16 @@ func (opts *CreateOptions) InTransaction(attempts int) {
 	opts.attempts = attempts
 }
 
-func CreateWithOptions(ctx context.Context, m modelable, copts *CreateOptions) error {
+func CreateWithOptions(ctx context.Context, m modelable, copts *CreateOptions) (err error) {
 	index(m)
 
-	var err error
 	if copts.attempts > 0 {
-		client := ClientFromContext(ctx)
-		opts := datastore.MaxAttempts(copts.attempts)
-
-		_, err = client.RunInTransaction(ctx, func(tx *datastore.Transaction) error {
+		opts := datastore.TransactionOptions{}
+		opts.XG = true
+		opts.Attempts = copts.attempts
+		err = datastore.RunInTransaction(ctx, func(ctx context.Context) error {
 			return createWithOptions(ctx, m, copts)
-		}, opts)
+		}, &opts)
 	} else {
 		err = createWithOptions(ctx, m, copts)
 	}
@@ -102,15 +101,8 @@ func createWithOptions(ctx context.Context, m modelable, opts *CreateOptions) er
 		model.references[i] = ref
 	}
 
-	var newKey *datastore.Key
-	if opts.stringId != "" {
-		newKey = datastore.NameKey(model.structName, opts.stringId, ancKey)
-	} else {
-		newKey = datastore.IDKey(model.structName, opts.intId, ancKey)
-	}
-
-	client := ClientFromContext(ctx)
-	key, err := client.Put(ctx, newKey, m)
+	newKey := datastore.NewKey(ctx, model.structName, opts.stringId, opts.intId, ancKey)
+	key, err := datastore.Put(ctx, newKey, m)
 	if err != nil {
 		return err
 	}
@@ -135,6 +127,7 @@ func createReference(ctx context.Context, ref *reference) (err error) {
 	}
 
 	ref.Key = ref.Modelable.getModel().Key
+
 
 	return nil
 }

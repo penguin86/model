@@ -2,6 +2,8 @@ package model
 
 import (
 	"fmt"
+	"google.golang.org/appengine/aetest"
+	"google.golang.org/appengine/datastore"
 	"google.golang.org/appengine/log"
 	"google.golang.org/appengine/memcache"
 	"reflect"
@@ -10,12 +12,11 @@ import (
 
 type Entity struct {
 	Model
-	Name          string
-	Num           int
-	Child         Child
-	EmptyChild    EmptyChild `model:"zero"`
+	Name       string
+	Num        int
+	Child      Child
+	EmptyChild EmptyChild `model:"zero"`
 	ReadonlyChild `model:"readonly"`
-	Nomo          NoModel
 }
 
 type Child struct {
@@ -39,20 +40,48 @@ type ReadonlyChild struct {
 	Value int
 }
 
-type NoModel struct {
+type ExtendedEntity struct {
+	Model
+	Name string
+	Child Child
+	Ext interface{}
+	Pls *StructPLS
+}
+
+type ExtensionImpl struct {
 	Name string
 }
 
-func TestCreateEmpty(t *testing.T) {
+type StructPLS struct {
+	PLSVal string
+}
 
-	done, ctx := newContextWithStartupTime(t, 60)
+func (pls *StructPLS) Load(props []datastore.Property) error {
+	for _, p := range props {
+		switch p.Name {
+		case "enzo":
+			pls.PLSVal = p.Value.(string)
+		}
+	}
+	return nil
+}
+
+func (pls *StructPLS) Save() ([]datastore.Property, error) {
+	return []datastore.Property{
+		{Name: "enzo", Value: pls.PLSVal},
+	}, nil
+}
+
+const total = 100
+const find = 10
+
+func TestIndexing(t *testing.T) {
+
+	ctx, done, err := aetest.NewContext()
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer done()
-
-	service := Service{}
-	service.Initialize()
-
-	ctx = service.OnStart(ctx)
-	defer service.OnEnd(ctx)
 
 	// test correct indexing
 	entity := Entity{}
@@ -61,10 +90,9 @@ func TestCreateEmpty(t *testing.T) {
 		t.Fatal("empty child is not skipIfZero")
 	}
 
-	entity.Nomo.Name = "nomo"
 	entity.Name = "entity"
 	entity.Child.Name = "child"
-	err := Create(ctx, &entity)
+	err = Create(ctx, &entity)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
@@ -77,27 +105,18 @@ func TestCreateEmpty(t *testing.T) {
 	if entity.EmptyChild.Key != nil {
 		t.Fatal("empty child has non-nil key")
 	}
-
-	if entity.Nomo.Name != "nomo" {
-		t.Fatal("Nomodel has invalid value")
-	}
 }
 
 func TestUpdate(t *testing.T) {
-	done, ctx := newContextWithStartupTime(t, 60)
+	ctx, done, err := aetest.NewContext()
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer done()
-
-	service := Service{}
-	service.Initialize()
-
-	ctx = service.OnStart(ctx)
-	defer service.OnEnd(ctx)
-
-	resetDatastoreEmulator(t)
 
 	rc := ReadonlyChild{}
 	rc.Value = 1
-	err := Create(ctx, &rc)
+	err = Create(ctx, &rc)
 	if err != nil {
 		t.Fatal(err.Error())
 	}
@@ -149,19 +168,14 @@ func TestUpdate(t *testing.T) {
 
 func TestDelete(t *testing.T) {
 
-	done, ctx := newContextWithStartupTime(t, 60)
+	ctx, done, err := aetest.NewContext()
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer done()
 
-	service := Service{}
-	service.Initialize()
-
-	ctx = service.OnStart(ctx)
-	defer service.OnEnd(ctx)
-
-	resetDatastoreEmulator(t)
-
 	rc := ReadonlyChild{}
-	err := Create(ctx, &rc)
+	err = Create(ctx, &rc)
 	if err != nil {
 		log.Errorf(ctx, err.Error())
 	}
@@ -206,22 +220,13 @@ func TestDelete(t *testing.T) {
 	}
 }
 
-const total = 100
-const find = 10
+func TestModelQuery(t *testing.T) {
 
-// this works with strongly consistent datastore (i.e. V3), while fails with eventual consistency
-func TestModel(t *testing.T) {
-
-	done, ctx := newContextWithStartupTime(t, 60)
+	ctx, done, err := aetest.NewContext()
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer done()
-
-	service := Service{}
-	service.Initialize()
-
-	ctx = service.OnStart(ctx)
-	defer service.OnEnd(ctx)
-
-	resetDatastoreEmulator(t)
 
 	for i := 0; i < total; i++ {
 		entity := Entity{}
@@ -235,29 +240,22 @@ func TestModel(t *testing.T) {
 		}
 	}
 
-	dst := make([]*Entity, 0)
-
-	q := NewQuery(&Entity{})
-	q = q.WithField("Num >", find)
-	q = q.OrderBy("Num", ASC)
-	err := q.GetMulti(ctx, &dst)
+	err = memcache.Flush(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	many := total - find - 1
-	t.Logf("looking for values with num greater than %d. There must be exactly %d entities", find, many)
+	dst := make([]*Entity, 0)
 
-	if len(dst) != many {
+	q := NewQuery(&Entity{})
+	q = q.WithField("Num >", find)
+	err = q.GetMulti(ctx, &dst)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-		last := find
-		for _, e := range dst {
-			if e.Num-last > 1 {
-				t.Logf("gap found between %d and %d", last, e.Num)
-			}
-			last = e.Num
-		}
-		t.Fatalf("invalid number of data returned. Count is %d, it must be %d", len(dst), many)
+	if len(dst) != total - find - 1 {
+		t.Fatalf("invalid number of data returned. Count is %d", len(dst))
 	}
 
 	for k := find + 1; k < total; k++ {
@@ -269,9 +267,146 @@ func TestModel(t *testing.T) {
 	}
 }
 
+// analogous to TestIndexing, but flushes memcache between write and read operation
+func TestDatastoreModel(t *testing.T) {
+	ctx, done, err := aetest.NewContext()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer done()
+
+	// test correct indexing
+	entity := Entity{}
+	index(&entity)
+	if !entity.EmptyChild.skipIfZero {
+		t.Fatal("empty child is not skipIfZero")
+	}
+
+	entity.Name = "entity"
+	entity.Child.Name = "child"
+	err = Create(ctx, &entity)
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+
+	if err = memcache.Flush(ctx); err != nil {
+		t.Fatalf("error flushing memcache: %s", err.Error())
+	}
+
+	e := Entity{}
+	err = FromEncodedKey(ctx, &e, entity.EncodedKey())
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+
+	if e.EmptyChild.Key != nil {
+		t.Fatal("empty child has non-nil key")
+	}
+
+	if e.Name != "entity" {
+		t.Fatalf("Entity name has changed between write and read. Is %q must be \"entity\"", e.Name)
+	}
+
+	if e.Child.Name != "child" {
+		t.Fatalf("Reference name has changed between write and read. Is %q must be \"child\"", e.Child.Name)
+	}
+}
+
+func TestModelExtension(t *testing.T) {
+	ctx, done, err := aetest.NewContext()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer done()
+
+	// test correct indexing
+	entity := ExtendedEntity{}
+
+	ext := &ExtensionImpl{Name: "extName"}
+
+	entity.Ext = ext
+	entity.Name = "entity"
+	entity.Child.Name = "child"
+	entity.Pls = &StructPLS{PLSVal:"plspls"}
+	err = Create(ctx, &entity)
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+
+	re := ExtendedEntity{}
+	err = FromIntID(ctx, &re, entity.IntID(), nil)
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+
+	if re.Name != "entity" {
+		t.Fatalf("Entity name has changed between write and read. Is %q must be \"entity\"", re.Name)
+	}
+
+	if re.Child.Name != "child" {
+		t.Fatalf("Reference name has changed between write and read. Is %q must be \"child\"", re.Child.Name)
+	}
+
+	ext = re.Ext.(*ExtensionImpl)
+	if ext.Name != "extName" {
+		t.Fatalf("Extension name has changed between write and read. Is %q must be \"extName\"", ext.Name)
+	}
+
+	if re.Pls.PLSVal != "plspls" {
+		t.Fatalf("StructPLS name has changed between write and read. Is %q must be \"plspls\"", ext.Name)
+	}
+}
+
+func TestModelExtensionCached(t *testing.T) {
+	ctx, done, err := aetest.NewContext()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer done()
+
+	// test correct indexing
+	entity := ExtendedEntity{}
+
+	ext := &ExtensionImpl{Name: "extName"}
+
+	entity.Ext = ext
+	entity.Name = "entity"
+	entity.Child.Name = "child"
+	entity.Pls = &StructPLS{PLSVal:"plspls"}
+	err = Create(ctx, &entity)
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+
+	if err = memcache.Flush(ctx); err != nil {
+		t.Fatalf("error flushing memcache: %s", err.Error())
+	}
+
+	re := ExtendedEntity{}
+	err = FromIntID(ctx, &re, entity.IntID(), nil)
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+
+	if re.Name != "entity" {
+		t.Fatalf("Entity name has changed between write and read. Is %q must be \"entity\"", re.Name)
+	}
+
+	if re.Child.Name != "child" {
+		t.Fatalf("Reference name has changed between write and read. Is %q must be \"child\"", re.Child.Name)
+	}
+
+	ext = re.Ext.(*ExtensionImpl)
+	if ext.Name != "extName" {
+		t.Fatalf("Extension name has changed between write and read. Is %q must be \"extName\"", ext.Name)
+	}
+
+	if re.Pls.PLSVal != "plspls" {
+		t.Fatalf("StructPLS name has changed between write and read. Is %q must be \"plspls\"", ext.Name)
+	}
+}
+
 func BenchmarkMapStructureLocked(b *testing.B) {
-	b.ReportAllocs()
-	b.ResetTimer()
 	entity := Entity{}
 	typ := reflect.TypeOf(entity)
 	structure := newEncodedStruct(typ.Name())

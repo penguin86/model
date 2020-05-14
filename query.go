@@ -1,11 +1,10 @@
 package model
 
 import (
-	"cloud.google.com/go/datastore"
 	"errors"
 	"fmt"
 	"golang.org/x/net/context"
-	"google.golang.org/api/iterator"
+	"google.golang.org/appengine/datastore"
 	"reflect"
 )
 
@@ -90,8 +89,7 @@ func (q *Query) Limit(limit int) *Query {
 }
 
 func (q *Query) Count(ctx context.Context) (int, error) {
-	client := ClientFromContext(ctx)
-	return client.Count(ctx, q.dq)
+	return q.dq.Count(ctx)
 }
 
 func (q *Query) Distinct(fields ...string) *Query {
@@ -145,7 +143,7 @@ func (query *Query) Get(ctx context.Context, dst interface{}) error {
 
 	_, err := query.get(ctx, dst)
 
-	if err != nil && err != iterator.Done {
+	if err != nil && err != datastore.Done {
 		return err
 	}
 
@@ -178,11 +176,11 @@ func (query *Query) GetAll(ctx context.Context, dst interface{}) error {
 
 		cursor, e = query.get(ctx, dst)
 
-		if e != iterator.Done && e != nil {
+		if e != datastore.Done && e != nil {
 			return e
 		}
 
-		done = e == iterator.Done
+		done = e == datastore.Done
 	}
 
 	return nil
@@ -201,9 +199,8 @@ func (query *Query) GetMulti(ctx context.Context, dst interface{}) error {
 		return errors.New("invalid query. Can't use projection queries with GetMulti")
 	}
 
-	client := ClientFromContext(ctx)
 	query.dq = query.dq.KeysOnly()
-	it := client.Run(ctx, query.dq)
+	it := query.dq.Run(ctx)
 
 	dstv := reflect.ValueOf(dst)
 
@@ -216,7 +213,7 @@ func (query *Query) GetMulti(ctx context.Context, dst interface{}) error {
 	for {
 		key, err := it.Next(nil)
 
-		if err == iterator.Done {
+		if err == datastore.Done {
 			break
 		}
 
@@ -248,13 +245,9 @@ func (query *Query) GetMulti(ctx context.Context, dst interface{}) error {
 }
 
 func (query *Query) get(ctx context.Context, dst interface{}) (*datastore.Cursor, error) {
-
-	client := ClientFromContext(ctx)
-
 	more := false
 	rc := 0
-
-	it := client.Run(ctx, query.dq)
+	it := query.dq.Run(ctx)
 
 	dstv := reflect.ValueOf(dst)
 
@@ -268,7 +261,7 @@ func (query *Query) get(ctx context.Context, dst interface{}) (*datastore.Cursor
 
 		Key, err := it.Next(nil)
 
-		if err == iterator.Done {
+		if err == datastore.Done {
 			break
 		}
 
@@ -307,7 +300,7 @@ func (query *Query) get(ctx context.Context, dst interface{}) (*datastore.Cursor
 
 	if !more {
 		//if there are no more entries to be loaded, break the loop
-		return nil, iterator.Done
+		return nil, datastore.Done
 	} else {
 		//else, if we still have entries, update cursor position
 		cursor, e := it.Cursor()
